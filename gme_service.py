@@ -1,0 +1,79 @@
+import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+import io
+from typing import List, Optional
+
+import torch
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from PIL import Image
+from pydantic import BaseModel
+from modelscope import AutoModel
+from modelscope.hub.snapshot_download import snapshot_download
+
+MODEL_ID = "iic/gme-Qwen2-VL-2B-Instruct"
+MODEL_ROOT = os.environ.get(
+    "GME_MODEL_DIR",
+    os.path.join(os.path.expanduser("~"), "gme_models"),
+)
+
+torch.backends.cudnn.benchmark = True
+
+app = FastAPI(title="GME-Qwen2-VL-2B Embedding Service")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+print("Loading model... (首次会下载权重)")
+
+os.makedirs(MODEL_ROOT, exist_ok=True)
+model_local_path = snapshot_download(
+    MODEL_ID,
+    cache_dir=MODEL_ROOT,
+    trust_remote_code=True,
+)
+
+gme = AutoModel.from_pretrained(
+    model_local_path,
+    torch_dtype=torch.float16,
+    device_map="auto",
+    trust_remote_code=True,
+)
+gme.eval()
+
+class TextRequest(BaseModel):
+    texts: List[str]
+    prompt: Optional[str] = None
+
+@torch.no_grad()
+def encode_text(texts: List[str], prompt: Optional[str] = None):
+    if prompt:
+        emb = gme.get_text_embeddings(texts=texts, instruction=prompt)
+    else:
+        emb = gme.get_text_embeddings(texts=texts)
+    return emb.detach().float().cpu().tolist()
+
+@torch.no_grad()
+def encode_image(images: List[Image.Image]):
+    pil_images = [img.convert("RGB") for img in images]
+    emb = gme.get_image_embeddings(images=pil_images)
+    return emb.detach().float().cpu().tolist()
+
+@app.post("/embed/text")
+def embed_text(payload: TextRequest):
+    if not payload.texts:
+        raise HTTPException(status_code=400, detail="texts 不能为空")
+    return {"embeddings": encode_text(payload.texts, payload.prompt)}
+
+@app.post("/embed/image")
+async def embed_image(file: UploadFile = File(...)):
+    try:
+        buf = await file.read()
+        image = Image.open(io.BytesIO(buf))
+    except Exception:
+        raise HTTPException(status_code=400, detail="无法解码图片")
+    return {"embeddings": encode_image([image])}
