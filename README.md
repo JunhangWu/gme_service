@@ -57,8 +57,8 @@ uvicorn gme_service:app --host 0.0.0.0 --port 8000
 1. 将项目放置在如 `/opt/gme_service` 的目录中，并使用 conda 创建环境：
 
    ```bash
-   conda create -n gme-service python=3.11
-   conda activate gme-service
+   conda create -n gme_service python=3.11
+   conda activate gme_service
    pip install fastapi uvicorn torch Pillow modelscope
    ```
 
