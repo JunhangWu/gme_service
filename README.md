@@ -52,9 +52,13 @@ uvicorn gme_service:app --host 0.0.0.0 --port 8000
 
 服务在启动时会调用 `snapshot_download` 将模型下载到 `GME_MODEL_DIR` 环境变量指定的目录。若未设置该变量，则默认写入 `~/gme_models`，并在其中创建 `iic/gme-Qwen2-VL-2B-Instruct` 子目录保存全部模型文件。下次启动会直接从该目录加载，无需重新下载。
 
+## 多 GPU 使用
+
+服务会在启动时检测 `torch.cuda.device_count()`：若可用 GPU 数量大于 1，会自动通过 `torch.nn.DataParallel` 对模型进行包装，实现多卡并行推理。确保在部署前正确设置 `CUDA_VISIBLE_DEVICES`（例如 `export CUDA_VISIBLE_DEVICES=0,1`），即可让两张 RTX 3090 同时工作。如需自定义并行策略，可在 `gme_service.py` 中调整相关逻辑。
+
 ## 在 Linux 服务器上使用 systemd 部署
 
-1. 将项目放置在如 `/opt/gme_service` 的目录中，并使用 conda 创建环境：
+1. 将项目放置在如 `/opt/gme_service` 的目录中，并使用 conda 创建环境（假设 conda 安装在 `/opt/conda`）：
 
    ```bash
    conda create -n gme_service python=3.11
@@ -62,7 +66,7 @@ uvicorn gme_service:app --host 0.0.0.0 --port 8000
    pip install fastapi uvicorn torch Pillow modelscope
    ```
 
-   如果服务需要由 systemd 启动，可在安装完成后运行 `conda deactivate`，并在 unit 文件中通过 `Environment` 指定 `conda` 环境路径（见下文）。
+   安装完成后可运行 `conda deactivate`；systemd 将直接调用虚拟环境中的可执行文件。
 
 2. 创建 systemd Unit `/etc/systemd/system/gme_service.service`：
 
@@ -76,9 +80,11 @@ uvicorn gme_service:app --host 0.0.0.0 --port 8000
    User=gme
    Group=gme
    WorkingDirectory=/opt/gme_service
-   Environment="PATH=/opt/conda/envs/gme-service/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
+   Environment="PATH=/opt/conda/envs/gme_service/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
+   Environment="CUDA_VISIBLE_DEVICES=0,1"
    Environment="TOKENIZERS_PARALLELISM=false"
-   ExecStart=/opt/conda/envs/gme-service/bin/uvicorn gme_service:app --host 0.0.0.0 --port 8000
+   Environment="GME_MODEL_DIR=/opt/gme_service/models"
+   ExecStart=/opt/conda/envs/gme_service/bin/uvicorn gme_service:app --host 0.0.0.0 --port 8000
    Restart=always
    RestartSec=5
 
@@ -86,7 +92,35 @@ uvicorn gme_service:app --host 0.0.0.0 --port 8000
    WantedBy=multi-user.target
    ```
 
-   请根据实际环境调整 `User`、`Group`、`WorkingDirectory`、`PATH` 和端口号。若 conda 安装位置不同，`PATH` 中的前缀也需同步修改。
+   - 根据实际情况调整 `User`、`Group`（推荐使用专用服务账号）、`WorkingDirectory`、端口号等。
+   - 如果 conda 安装位置不同，请修改 `PATH` 中的前缀，使其指向目标环境的 `bin` 目录。
+   - `CUDA_VISIBLE_DEVICES` 控制可使用的 GPU 编号，可按需调整。
+   - `GME_MODEL_DIR` 用于指定模型落盘目录，便于持久化管理与备份。
+   - 可以通过以下命令直接在命令行生成该 unit 文件：
+
+     ```bash
+     sudo tee /etc/systemd/system/gme_service.service > /dev/null <<'EOF'
+     [Unit]
+     Description=GME Embedding Service
+     After=network.target
+
+     [Service]
+     Type=simple
+     User=gme
+     Group=gme
+     WorkingDirectory=/opt/gme_service
+     Environment="PATH=/opt/conda/envs/gme_service/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
+     Environment="CUDA_VISIBLE_DEVICES=0,1"
+     Environment="TOKENIZERS_PARALLELISM=false"
+     Environment="GME_MODEL_DIR=/opt/gme_service/models"
+     ExecStart=/opt/conda/envs/gme_service/bin/uvicorn gme_service:app --host 0.0.0.0 --port 8000
+     Restart=always
+     RestartSec=5
+
+     [Install]
+     WantedBy=multi-user.target
+     EOF
+     ```
 
 3. 重载 systemd 并设置开机自启、启动服务：
 

@@ -43,7 +43,18 @@ gme = AutoModel.from_pretrained(
     device_map="auto",
     trust_remote_code=True,
 )
+if torch.cuda.is_available() and torch.cuda.device_count() > 1:
+    print(f"Detected {torch.cuda.device_count()} GPUs, enabling DataParallel inference.")
+    gme = torch.nn.DataParallel(gme)
+
 gme.eval()
+
+
+def _get_model():
+    if isinstance(gme, torch.nn.DataParallel):
+        return gme.module
+    return gme
+
 
 class TextRequest(BaseModel):
     texts: List[str]
@@ -51,16 +62,18 @@ class TextRequest(BaseModel):
 
 @torch.no_grad()
 def encode_text(texts: List[str], prompt: Optional[str] = None):
+    model = _get_model()
     if prompt:
-        emb = gme.get_text_embeddings(texts=texts, instruction=prompt)
+        emb = model.get_text_embeddings(texts=texts, instruction=prompt)
     else:
-        emb = gme.get_text_embeddings(texts=texts)
+        emb = model.get_text_embeddings(texts=texts)
     return emb.detach().float().cpu().tolist()
 
 @torch.no_grad()
 def encode_image(images: List[Image.Image]):
     pil_images = [img.convert("RGB") for img in images]
-    emb = gme.get_image_embeddings(images=pil_images)
+    model = _get_model()
+    emb = model.get_image_embeddings(images=pil_images)
     return emb.detach().float().cpu().tolist()
 
 @app.post("/embed/text")
