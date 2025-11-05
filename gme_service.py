@@ -2,7 +2,6 @@ import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 import io
-import inspect
 from typing import List, Optional
 
 import torch
@@ -32,33 +31,36 @@ app.add_middleware(
 print("Loading model... (首次会下载权重)")
 
 os.makedirs(MODEL_ROOT, exist_ok=True)
-snapshot_download_signature = inspect.signature(snapshot_download)
-snapshot_kwargs = {}
-if "trust_remote_code" in snapshot_download_signature.parameters:
-    snapshot_kwargs["trust_remote_code"] = True
+snapshot_kwargs = {
+    "cache_dir": MODEL_ROOT,
+    "trust_remote_code": True,
+}
+try:
+    model_local_path = snapshot_download(MODEL_ID, **snapshot_kwargs)
+except TypeError as exc:
+    if "trust_remote_code" not in str(exc):
+        raise
+    snapshot_kwargs.pop("trust_remote_code")
+    model_local_path = snapshot_download(MODEL_ID, **snapshot_kwargs)
 
-model_local_path = snapshot_download(
-    MODEL_ID,
-    cache_dir=MODEL_ROOT,
-    **snapshot_kwargs,
-)
-
-auto_model_signature = inspect.signature(AutoModel.from_pretrained)
 auto_model_kwargs = {
     "torch_dtype": torch.float16,
     "device_map": "auto",
     "trust_remote_code": True,
 }
-filtered_auto_model_kwargs = {
-    key: value
-    for key, value in auto_model_kwargs.items()
-    if key in auto_model_signature.parameters
-}
-
-gme = AutoModel.from_pretrained(
-    model_local_path,
-    **filtered_auto_model_kwargs,
-)
+try:
+    gme = AutoModel.from_pretrained(
+        model_local_path,
+        **auto_model_kwargs,
+    )
+except TypeError as exc:
+    if "trust_remote_code" not in str(exc):
+        raise
+    auto_model_kwargs.pop("trust_remote_code")
+    gme = AutoModel.from_pretrained(
+        model_local_path,
+        **auto_model_kwargs,
+    )
 if torch.cuda.is_available() and torch.cuda.device_count() > 1:
     print(f"Detected {torch.cuda.device_count()} GPUs, enabling DataParallel inference.")
     gme = torch.nn.DataParallel(gme)
