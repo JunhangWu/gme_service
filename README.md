@@ -21,7 +21,7 @@ GME Service 提供一个基于 FastAPI 的服务，用于调用 ModelScope 的 `
 
    ```bash
    pip install fastapi uvicorn torch Pillow modelscope packaging
-   pip install transformers==4.41.2 peft diffusers
+   pip install transformers==4.51.3 peft diffusers
    ```
 
 > 如需 GPU 支持，请根据实际 CUDA 版本安装匹配的 `torch`。
